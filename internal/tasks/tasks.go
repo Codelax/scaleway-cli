@@ -26,18 +26,10 @@ type Task struct {
 
 type Tasks struct {
 	tasks []*Task
-
-	LoggerMode LoggerMode
 }
 
 func Begin() *Tasks {
-	return &Tasks{
-		LoggerMode: PrinterModeAuto,
-	}
-}
-
-func (ts *Tasks) SetLoggerMode(mode LoggerMode) {
-	ts.LoggerMode = mode
+	return &Tasks{}
 }
 
 func Add[TaskArg any, TaskReturn any](ts *Tasks, name string, taskFunc TaskFunc[TaskArg, TaskReturn]) {
@@ -80,9 +72,10 @@ func setupContext(ctx context.Context) (context.Context, func()) {
 }
 
 // Cleanup execute all tasks cleanup function before failed one in reverse order
-func (ts *Tasks) Cleanup(ctx context.Context, logger *Logger, failed int) {
+func (ts *Tasks) Cleanup(ctx context.Context, failed int) {
 	cancelableCtx, cleanCtx := setupContext(ctx)
 	defer cleanCtx()
+	loader := setupLoader()
 
 	for i := failed; i >= 0; i-- {
 		task := ts.tasks[i]
@@ -97,17 +90,13 @@ func (ts *Tasks) Cleanup(ctx context.Context, logger *Logger, failed int) {
 		if len(task.cleanFunctions) != 0 {
 			var err error
 			for i, cleanUpFunc := range task.cleanFunctions {
-				loggerEntry := logger.AddEntry(fmt.Sprintf("Cleaning task %q %d/%d", task.Name, i+1, len(task.cleanFunctions)))
-				task.Logs = loggerEntry.Logs
-				loggerEntry.Start()
-
+				loader.Start()
+				fmt.Sprintf("Cleaning task %q %d/%d", task.Name, i+1, len(task.cleanFunctions))
 				err = cleanUpFunc(cancelableCtx)
+				loader.Stop()
 				if err != nil {
-					loggerEntry.Complete(err)
 					break
 				}
-
-				loggerEntry.Complete(nil)
 			}
 		}
 	}
@@ -115,48 +104,38 @@ func (ts *Tasks) Cleanup(ctx context.Context, logger *Logger, failed int) {
 
 // Execute tasks with interactive display and cleanup on fail
 func (ts *Tasks) Execute(ctx context.Context, data interface{}) (interface{}, error) {
+	var err error
+	loader := setupLoader()
 	cancelableCtx, cleanCtx := setupContext(ctx)
 	defer cleanCtx()
 
-	logger, err := NewTasksLogger(context.Background(), ts.LoggerMode)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		err := logger.CloseAndWait()
-		if err != nil {
-			fmt.Println("failed to close logger:", err)
-		}
-	}()
-
 	for i := range ts.tasks {
 		task := ts.tasks[i]
-
-		loggerEntry := logger.AddEntry(task.Name)
-		task.Logs = loggerEntry.Logs
-		loggerEntry.Start()
 
 		// Add context and reset cleanup functions, allows to execute multiple times
 		task.Ctx = cancelableCtx
 		task.cleanFunctions = []CleanupFunc(nil)
 
+		fmt.Printf("[%d/%d] %s\n", i+1, len(ts.tasks), task.Name)
+		loader.Start()
+
 		data, err = task.taskFunction(task, data)
 		if err != nil {
-			loggerEntry.Complete(err)
-			ts.Cleanup(ctx, logger, i)
+			loader.Stop()
+			ts.Cleanup(ctx, i)
 
 			return nil, fmt.Errorf("task %d %q failed: %w", i+1, task.Name, err)
 		}
 
 		select {
 		case <-ctx.Done():
-			loggerEntry.Complete(context.Canceled)
-			ts.Cleanup(ctx, logger, i)
+			loader.Stop()
+			ts.Cleanup(ctx, i)
 			return nil, fmt.Errorf("task %d %q failed: context canceled", i+1, task.Name)
 		default:
 		}
 
-		loggerEntry.Complete(nil)
+		loader.Stop()
 	}
 
 	return data, nil

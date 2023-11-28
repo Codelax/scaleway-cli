@@ -15,7 +15,6 @@ import (
 	"time"
 
 	pack "github.com/buildpacks/pack/pkg/client"
-	"github.com/buildpacks/pack/pkg/logging"
 	dockertypes "github.com/docker/docker/api/types"
 	dockerregistry "github.com/docker/docker/api/types/registry"
 	docker "github.com/docker/docker/client"
@@ -276,7 +275,7 @@ func DeployStepDockerBuildImage(t *tasks.Task, data *DeployStepPackImageResponse
 	}
 	defer imageBuildResponse.Body.Close()
 
-	err = jsonmessage.DisplayJSONMessagesStream(imageBuildResponse.Body, t.Logs, t.Logs.Fd(), true, nil)
+	err = jsonmessage.DisplayJSONMessagesStream(imageBuildResponse.Body, os.Stdout, os.Stdout.Fd(), true, nil)
 	if err != nil {
 		if jerr, ok := err.(*jsonmessage.JSONError); ok {
 			// If no error code is set, default to 1
@@ -306,7 +305,7 @@ func DeployStepBuildpackBuildImage(t *tasks.Task, data *DeployStepFetchOrCreateR
 		return nil, err
 	}
 
-	packClient, err := pack.NewClient(pack.WithDockerClient(dockerClient), pack.WithLogger(logging.NewLogWithWriters(t.Logs, t.Logs)))
+	packClient, err := pack.NewClient(pack.WithDockerClient(dockerClient))
 	if err != nil {
 		return nil, fmt.Errorf("could not create pack client: %w", err)
 	}
